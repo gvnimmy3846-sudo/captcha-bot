@@ -1,188 +1,124 @@
-from telegram import Update, ReplyKeyboardMarkup
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram import Update
+from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackContext
 import random
 import string
-import json
 
+# =========================
+# BOT TOKEN
+# =========================
 TOKEN = "8838766761:AAFQRp1bgIiUjCgIaywmDMD_hmRfUO49op8"
 
-ADMIN_ID = 1282253529
+#Store captcha answers
+captcha_data = {}
 
-USERS_FILE = "users.json"
-WITHDRAW_FILE = "withdrawals.json"
+# =========================
+# START COMMAND
+# =========================
+def start(update: Update, context: CallbackContext):
+    update.message.reply_text("Captcha Bot Working ✅")
 
-captchas = {}
-withdraw_mode = {}
+# =========================
+# NEW MEMBER JOIN
+# =========================
+def new_member(update: Update, context: CallbackContext):
 
-def load_data(file_name):
-    try:
-        with open(file_name, "r") as file:
-            return json.load(file)
-    except:
-        return {}
+    for member in update.message.new_chat_members:
 
-def save_data(file_name, data):
-    with open(file_name, "w") as file:
-        json.dump(data, file)
+        # Generate random captcha
+        captcha = ''.join(random.choices(string.ascii_uppercase + string.digits, k=5))
 
-users = load_data(USERS_FILE)
-withdrawals = load_data(WITHDRAW_FILE)
+        # Save captcha
+        captcha_data[member.id] = captcha
 
-def generate_captcha():
-    return ''.join(random.choices(string.ascii_letters + string.digits, k=6))
+        # Send captcha
+        context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text=f"""
+Welcome {member.first_name} 👋
 
-keyboard = [
-    ["🔄 Next Captcha"],
-    ["💰 Balance", "🏧 Withdraw"]
-]
+Solve this captcha to stay in group:
 
-reply_markup = ReplyKeyboardMarkup(
-    keyboard,
-    resize_keyboard=True
-)
+➡️ {captcha}
 
-async def send_captcha(update, user_id):
-
-    captcha = generate_captcha()
-    captchas[user_id] = captcha
-
-    await update.message.reply_text(
-        f"🧩 Solve this captcha:\n\n{captcha}",
-        reply_markup=reply_markup
-    )
-
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
-    user_id = str(update.effective_user.id)
-    username = update.effective_user.username
-
-    if user_id not in users:
-
-        users[user_id] = {
-            "username": username,
-            "balance": 0,
-            "solved": 0
-        }
-
-        save_data(USERS_FILE, users)
-
-    await update.message.reply_text(
-        "✅ Welcome To Captcha Earn Bot"
-    )
-
-    await send_captcha(update, user_id)
-
-async def message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
-    user_id = str(update.effective_user.id)
-    text = update.message.text
-
-    if user_id not in users:
-        return
-
-    if text == "💰 Balance":
-
-        await update.message.reply_text(
-            f"💰 Balance: ₹{users[user_id]['balance']:.2f}\n"
-            f"📌 Solved: {users[user_id]['solved']}"
+Send the captcha in chat within 60 seconds.
+"""
         )
 
-    elif text == "🔄 Next Captcha":
+        # Kick after 60 sec if wrong
+        context.job_queue.run_once(
+            kick_user,
+            60,
+            context={
+                "chat_id": update.effective_chat.id,
+                "user_id": member.id
+            }
+        )
 
-        await send_captcha(update, user_id)
+# =========================
+# CHECK CAPTCHA
+# =========================
+def check_captcha(update: Update, context: CallbackContext):
 
-    elif text == "🏧 Withdraw":
+    user_id = update.message.from_user.id
+    text = update.message.text.strip()
 
-        if users[user_id]["balance"] >= 10:
+    if user_id in captcha_data:
 
-            withdraw_mode[user_id] = True
+        correct = captcha_data[user_id]
 
-            await update.message.reply_text(
-                "Send Your UPI ID"
-            )
+        if text == correct:
+
+            update.message.reply_text("✅ Verification Successful")
+
+            del captcha_data[user_id]
 
         else:
 
-            await update.message.reply_text(
-                "❌ Minimum ₹10 Required"
+            update.message.reply_text("❌ Wrong Captcha")
+
+# =========================
+# KICK USER
+# =========================
+def kick_user(context: CallbackContext):
+
+    job = context.job.context
+
+    chat_id = job["chat_id"]
+    user_id = job["user_id"]
+
+    if user_id in captcha_data:
+
+        try:
+            context.bot.kick_chat_member(chat_id, user_id)
+
+            context.bot.send_message(
+                chat_id=chat_id,
+                text=f"❌ User removed for wrong captcha"
             )
 
-    elif user_id in withdraw_mode:
+            del captcha_data[user_id]
 
-        upi = text
+        except:
+            pass
 
-        withdrawal_id = str(len(withdrawals) + 1)
+# =========================
+# MAIN
+# =========================
+updater = Updater(TOKEN, use_context=True)
 
-        withdrawals[withdrawal_id] = {
-            "user_id": user_id,
-            "username": users[user_id]["username"],
-            "upi": upi,
-            "amount": users[user_id]["balance"],
-            "status": "Pending"
-        }
+dp = updater.dispatcher
 
-        save_data(WITHDRAW_FILE, withdrawals)
+# Commands
+dp.add_handler(CommandHandler("start", start))
 
-        withdraw_mode.pop(user_id)
+# New members
+dp.add_handler(MessageHandler(Filters.status_update.new_chat_members, new_member))
 
-        await update.message.reply_text(
-            "✅ Withdrawal Request Submitted"
-        )
+# Captcha answers
+dp.add_handler(MessageHandler(Filters.text & ~Filters.command, check_captcha))
 
-    elif user_id in captchas:
+print("Captcha Bot Started ✅")
 
-        if text == captchas[user_id]:
+updater.start_polling()
+updater.idle()
 
-            users[user_id]["balance"] += 0.05
-            users[user_id]["solved"] += 1
-
-            save_data(USERS_FILE, users)
-
-            await update.message.reply_text(
-                f"✅ Correct!\n\n"
-                f"💰 Balance: ₹{users[user_id]['balance']:.2f}\n"
-                f"📌 Solved: {users[user_id]['solved']}"
-            )
-
-            await send_captcha(update, user_id)
-
-        else:
-
-            await update.message.reply_text(
-                "❌ Wrong Captcha"
-            )
-
-async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
-    user_id = update.effective_user.id
-
-    if user_id == ADMIN_ID:
-
-        total_users = len(users)
-
-        msg = f"👨‍💼 ADMIN PANEL\n\n👥 Total Users: {total_users}\n\n"
-
-        for uid, data in users.items():
-
-            msg += (
-                f"🆔 {uid}\n"
-                f"👤 {data['username']}\n"
-                f"💰 ₹{data['balance']:.2f}\n"
-                f"📌 Solved: {data['solved']}\n\n"
-            )
-
-        await update.message.reply_text(msg)
-
-    else:
-
-        await update.message.reply_text(
-            "❌ Access Denied"
-        )
-
-app = ApplicationBuilder().token(TOKEN).build()
-
-app.add_handler(CommandHandler("start", start))
-app.add_handler(CommandHandler("admin", admin))
-app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message))
-
-app.run_polling()
