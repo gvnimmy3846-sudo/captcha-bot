@@ -5,7 +5,7 @@ TOKEN = "8838766761:AAFQRp1bgIiUjCgIaywmDMD_hmRfUO49op8"
 def start(update, context):
     update.message.reply_text("Bot working successfully ✅")
 
-updater = Updater(TOKEN, use_context=True)
+updater = Updater(TOKEN)
 
 dp = updater.dispatcher
 
