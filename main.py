@@ -8,10 +8,9 @@ def start(update, context):
 updater = Updater(TOKEN)
 
 dp = updater.dispatcher
-
 dp.add_handler(CommandHandler("start", start))
 
-print("Bot Started...")
+print("Bot Started ✅")
 
 updater.start_polling()
 updater.idle()
